@@ -1,108 +1,63 @@
 package gdg.hongik.mission.controller;
 
-import gdg.hongik.mission.Product;
-import gdg.hongik.mission.ProductStore;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import gdg.hongik.mission.dto.request.PurchaseItemRequest;
+import gdg.hongik.mission.dto.response.ProductResponse;
+import gdg.hongik.mission.dto.response.PurchaseResponse;
+import gdg.hongik.mission.service.ProductService;
+import gdg.hongik.mission.service.ProductService.ErrorCode;
+import gdg.hongik.mission.service.ProductService.ErrorResponse;
+import gdg.hongik.mission.service.ProductService.ProductException;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
+@CrossOrigin(origins = "*")
 @RestController
-@RequestMapping("/api")
+@RequestMapping("/products")
+@RequiredArgsConstructor
 public class ProductUserController {
 
-    // 1. 상품 조회: GET /api/products?name=키보드
-    @GetMapping("/products")
-    public Map<String, Object> getProduct(@RequestParam String name) {
-        for (Product product : ProductStore.products) {
-            if (product.getName().equals(name)) {
-                Map<String, Object> result = new LinkedHashMap<>();
-                result.put("productId", product.getId());
-                result.put("name", product.getName());
-                result.put("price", product.getPrice());
-                result.put("stock", product.getStock());
-                return result;
-            }
-        }
-        throw new RuntimeException("존재하지 않는 상품입니다. (상품명: " + name + ")");
+    private final ProductService productService;
+
+    // 1.1 전체 상품 목록 조회: GET /products
+    @GetMapping
+    public List<ProductResponse> getAllProducts() {
+        return productService.getAllProducts();
     }
 
-    // 2. 상품 구매: POST /api/orders
-    @SuppressWarnings("unchecked")
-    @PostMapping("/orders")
-    public Map<String, Object> purchase(@RequestBody Map<String, Object> body) {
-        List<Map<String, Object>> requestItems = (List<Map<String, Object>>) body.get("items");
-        if (requestItems == null || requestItems.isEmpty()) {
-            throw new RuntimeException("구매할 상품이 없습니다.");
-        }
-
-        // 1단계: 전부 구매 가능한지 먼저 검사 (하나라도 실패하면 아무것도 차감하지 않음)
-        Set<Long> seenIds = new HashSet<>();
-        for (Map<String, Object> item : requestItems) {
-            Long productId = toLong(item.get("productId"));
-            long quantity = toLong(item.get("quantity"));
-
-            if (quantity < 1) {
-                throw new RuntimeException("구매 수량은 1 이상이어야 합니다.");
-            }
-            if (!seenIds.add(productId)) {
-                throw new RuntimeException("같은 상품을 중복해서 요청할 수 없습니다. (상품 ID: " + productId + ")");
-            }
-
-            Product product = findById(productId);
-            if (product.getStock() < quantity) {
-                throw new RuntimeException("재고가 부족합니다. (상품: " + product.getName()
-                        + ", 요청: " + quantity + ", 재고: " + product.getStock() + ")");
-            }
-        }
-
-        // 2단계: 재고 차감 + 응답 만들기
-        long totalPrice = 0;
-        List<Map<String, Object>> boughtItems = new ArrayList<>();
-        for (Map<String, Object> item : requestItems) {
-            Product product = findById(toLong(item.get("productId")));
-            long quantity = toLong(item.get("quantity"));
-
-            product.setStock(product.getStock() - quantity);
-
-            long price = product.getPrice() * quantity;
-            totalPrice += price;
-
-            Map<String, Object> bought = new LinkedHashMap<>();
-            bought.put("name", product.getName());
-            bought.put("quantity", quantity);
-            bought.put("price", price);
-            boughtItems.add(bought);
-        }
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("totalPrice", totalPrice);
-        result.put("items", boughtItems);
-        return result;
+    // 1.2 상품명 단건 조회: GET /products?itemName=원피스
+    @GetMapping(params = "itemName")
+    public ProductResponse getProduct(@RequestParam String itemName) {
+        return productService.getProduct(itemName);
     }
 
-    private Product findById(Long productId) {
-        for (Product product : ProductStore.products) {
-            if (product.getId().equals(productId)) {
-                return product;
-            }
-        }
-        throw new RuntimeException("존재하지 않는 상품입니다. (상품 ID: " + productId + ")");
+    // 1.3 장바구니 일괄 구매: POST /products/purchase
+    @PostMapping("/purchase")
+    public PurchaseResponse purchase(@RequestBody List<PurchaseItemRequest> requests) {
+        return productService.purchase(requests);
     }
 
-    private Long toLong(Object value) {
-        if (value instanceof Number) {
-            return ((Number) value).longValue();
-        }
-        throw new RuntimeException("숫자 값이 필요합니다.");
+    // ===================== 에러 응답 =====================
+
+    @ExceptionHandler(ProductException.class)
+    public ResponseEntity<ErrorResponse> handleProductException(ProductException e) {
+        ErrorCode errorCode = e.getErrorCode();
+        return ResponseEntity.status(errorCode.getStatus()).body(ErrorResponse.from(errorCode));
+    }
+
+    // JSON 형식 오류, 숫자 자리에 문자열, 필수 파라미터 누락 등
+    @ExceptionHandler({
+            HttpMessageNotReadableException.class,
+            MissingServletRequestParameterException.class,
+            MethodArgumentTypeMismatchException.class
+    })
+    public ResponseEntity<ErrorResponse> handleInvalidRequest(Exception e) {
+        ErrorCode errorCode = ErrorCode.INVALID_REQUEST;
+        return ResponseEntity.status(errorCode.getStatus()).body(ErrorResponse.from(errorCode));
     }
 }
